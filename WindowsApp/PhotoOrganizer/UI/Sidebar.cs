@@ -20,6 +20,9 @@ public enum FilterKind
     Object,        // a saved object filter; Key holds its search words
     ObjectSearch,  // what the search by object found, on its own page
     Map,           // the files that know where they were taken, on a map
+    Screenshots,   // screenshots, told by name, folder and screen size (see Core/Screenshots)
+    Pictures,      // postcards, memes, drawings — not photographs (see Core/Pictures)
+    Videos,
 }
 
 public sealed record Filter(FilterKind Kind, string? Key = null);
@@ -85,8 +88,9 @@ public sealed class Sidebar : DockPanel
     /// (-1 hides the row: the feature is off). objectFilters: saved object filters with their counts.
     /// </summary>
     public void Rebuild(bool hasLibrary, Dictionary<string, long> counts, List<Person> people, Filter? selecting = null,
-                        List<(string Query, long Count)>? objectFilters = null)
+                        List<(string Query, long Count)>? objectFilters = null, Func<Person, long>? personCount = null)
     {
+        personCount ??= person => person.Items.Count;
         _hasLibrary = hasLibrary;
         _counts = counts;
         _people = people;
@@ -101,12 +105,16 @@ public sealed class Sidebar : DockPanel
             // Always there: selecting it is how the search by photo is found and started.
             rows.Add(new Row(L("Поиск по фото"), "photo-search", counts.GetValueOrDefault("similar", -1), new Filter(FilterKind.Similar)));
             rows.Add(new Row(L("Карта"), "map", counts.GetValueOrDefault("located"), new Filter(FilterKind.Map)));
+            rows.Add(new Row(L("Типы"), Section: "types"));
+            rows.Add(new Row(L("Скриншоты"), "screenshot", counts.GetValueOrDefault("screenshots"), new Filter(FilterKind.Screenshots)));
+            rows.Add(new Row(L("Картинки"), "picture", counts.GetValueOrDefault("pictures"), new Filter(FilterKind.Pictures)));
+            rows.Add(new Row(L("Видео"), "video", counts.GetValueOrDefault("videos"), new Filter(FilterKind.Videos)));
             if (people.Count > 0)
             {
                 rows.Add(new Row(L("Люди"), Section: "people"));
                 // The long tail of people seen in a handful of photos would bury everything below.
                 foreach (var person in people.Take(30))
-                    rows.Add(new Row(person.DisplayName, "person", person.Items.Count, new Filter(FilterKind.Person, person.Key), Person: person));
+                    rows.Add(new Row(person.DisplayName, "person", personCount(person), new Filter(FilterKind.Person, person.Key), Person: person));
             }
             rows.Add(new Row(L("Объекты"), Section: "objects", AddButton: true));
             foreach (var (query, count) in _objectFilters) rows.Add(new Row(query, "tag", count, new Filter(FilterKind.Object, query)));

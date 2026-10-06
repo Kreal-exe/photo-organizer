@@ -483,15 +483,37 @@ static void PODateFromTakeoutSidecars(NSArray<POPhotoItem *> *items, NSArray<NSU
     atomic_uint_fast64_t _done;
 }
 
-- (instancetype)initWithRootURL:(NSURL *)rootURL {
-    if ((self = [super init])) {
-        // The directory enumerator reports canonical paths (/private/var/… rather than /var/…), so the root
-        // has to be canonical too for relative paths to be computed correctly.
++ (NSArray<NSURL *> *)normalizedRootURLs:(NSArray<NSURL *> *)urls {
+    // The directory enumerator reports canonical paths (/private/var/… rather than /var/…), so the roots have to be
+    // canonical too for relative paths to be computed correctly.
+    NSMutableArray<NSURL *> *canonical = [NSMutableArray array];
+    for (NSURL *url in urls) {
+        NSURL *root = url;
         char resolved[PATH_MAX];
-        if (realpath(rootURL.fileSystemRepresentation, resolved)) {
-            rootURL = [NSURL fileURLWithFileSystemRepresentation:resolved isDirectory:YES relativeToURL:nil];
+        if (realpath(url.fileSystemRepresentation, resolved)) root = [NSURL fileURLWithFileSystemRepresentation:resolved isDirectory:YES relativeToURL:nil];
+        BOOL known = NO;
+        for (NSURL *other in canonical) known = known || [other.path isEqualToString:root.path];
+        if (!known) [canonical addObject:root];
+    }
+    NSMutableArray<NSURL *> *outer = [NSMutableArray array];
+    for (NSURL *root in canonical) {
+        BOOL inside = NO;
+        for (NSURL *other in canonical) {
+            if (other != root && [root.path hasPrefix:[other.path stringByAppendingString:@"/"]]) inside = YES;
         }
-        _rootURL = rootURL;
+        if (!inside) [outer addObject:root];
+    }
+    return outer;
+}
+
+- (instancetype)initWithRootURL:(NSURL *)rootURL {
+    return [self initWithRootURLs:@[rootURL]];
+}
+
+- (instancetype)initWithRootURLs:(NSArray<NSURL *> *)rootURLs {
+    if ((self = [super init])) {
+        _rootURLs = [POScanner normalizedRootURLs:rootURLs];
+        _rootURL = _rootURLs.firstObject;
         _sidecars = [NSMutableArray array];
         _deprioritizedFolders = @[];
     }
@@ -516,19 +538,21 @@ static void PODateFromTakeoutSidecars(NSArray<POPhotoItem *> *items, NSArray<NSU
     NSMutableArray<POPhotoItem *> *items = [self enumerateMediaWithProgress:progress];
     if (atomic_load(&_cancelled)) return nil;
 
-    POScanCache *cache = [[POScanCache alloc] initWithRootURL:self.rootURL];
+    // What earlier scans of these folders read is reused: a cache per folder.
+    NSMutableDictionary<NSString *, POScanCache *> *caches = [NSMutableDictionary dictionary];
+    for (NSURL *root in self.rootURLs) caches[root.path] = [[POScanCache alloc] initWithRootURL:root];
     [self forEach:items phase:POScanPhaseMetadata progress:progress work:^(POPhotoItem *item) {
-        POReadMetadata(item, cache);
+        POReadMetadata(item, caches[item.rootURL.path]);
     }];
-    [cache save];
+    for (POScanCache *cache in caches.allValues) [cache save];
     if (atomic_load(&_cancelled)) return nil;
 
     PODateFromTakeoutSidecars(items, _sidecars);
     PODateFromNeighbors(items);
     [POManualDates applyToItems:items];
 
-    [self findDuplicatesIn:items cache:cache progress:progress];
-    [cache save];
+    [self findDuplicatesIn:items caches:caches progress:progress];
+    for (POScanCache *cache in caches.allValues) [cache save];
     if (atomic_load(&_cancelled)) return nil;
 
     [items sortUsingComparator:^NSComparisonResult(POPhotoItem *a, POPhotoItem *b) {
@@ -540,16 +564,24 @@ static void PODateFromTakeoutSidecars(NSArray<POPhotoItem *> *items, NSArray<NSU
 #pragma mark - Phases
 
 - (NSMutableArray<POPhotoItem *> *)enumerateMediaWithProgress:(POScanProgress)progress {
+    NSMutableArray<POPhotoItem *> *items = [NSMutableArray array];
+    [_sidecars removeAllObjects];
+    for (NSURL *root in self.rootURLs) {
+        if (atomic_load(&_cancelled)) break;
+        [self enumerateRoot:root into:items progress:progress];
+    }
+    return items;
+}
+
+- (void)enumerateRoot:(NSURL *)rootURL into:(NSMutableArray<POPhotoItem *> *)items progress:(POScanProgress)progress {
     NSArray<NSURLResourceKey> *keys = @[NSURLIsRegularFileKey, NSURLContentTypeKey, NSURLFileSizeKey,
                                         NSURLCreationDateKey, NSURLContentModificationDateKey];
     NSDirectoryEnumerator<NSURL *> *enumerator =
-        [NSFileManager.defaultManager enumeratorAtURL:self.rootURL
+        [NSFileManager.defaultManager enumeratorAtURL:rootURL
                            includingPropertiesForKeys:keys
                                               options:NSDirectoryEnumerationSkipsHiddenFiles | NSDirectoryEnumerationSkipsPackageDescendants
                                          errorHandler:^BOOL(NSURL *url, NSError *error) { return YES; }];
-    NSString *rootPrefix = [self.rootURL.path stringByAppendingString:@"/"];
-    NSMutableArray<POPhotoItem *> *items = [NSMutableArray array];
-    [_sidecars removeAllObjects];
+    NSString *rootPrefix = [rootURL.path stringByAppendingString:@"/"];
     for (NSURL *url in enumerator) {
         if (atomic_load(&_cancelled)) break;
         NSDictionary<NSURLResourceKey, id> *values = [url resourceValuesForKeys:keys error:NULL];
@@ -564,7 +596,7 @@ static void PODateFromTakeoutSidecars(NSArray<POPhotoItem *> *items, NSArray<NSU
 
         NSString *path = url.path;
         if (![path hasPrefix:rootPrefix]) continue;
-        POPhotoItem *item = [[POPhotoItem alloc] initWithURL:url relativePath:[path substringFromIndex:rootPrefix.length]];
+        POPhotoItem *item = [[POPhotoItem alloc] initWithURL:url relativePath:[path substringFromIndex:rootPrefix.length] rootURL:rootURL];
         item.video = isVideo;
         struct stat info;
         item.cloudOnly = lstat(url.fileSystemRepresentation, &info) == 0 && (info.st_flags & SF_DATALESS) != 0;
@@ -576,7 +608,6 @@ static void PODateFromTakeoutSidecars(NSArray<POPhotoItem *> *items, NSArray<NSU
         [items addObject:item];
         if (progress && items.count % 50 == 0) progress(POScanPhaseEnumerating, items.count, 0);
     }
-    return items;
 }
 
 - (void)forEach:(NSArray<POPhotoItem *> *)items phase:(POScanPhase)phase progress:(POScanProgress)progress work:(void (^)(POPhotoItem *item))work {
@@ -594,7 +625,7 @@ static void PODateFromTakeoutSidecars(NSArray<POPhotoItem *> *items, NSArray<NSU
     });
 }
 
-- (void)findDuplicatesIn:(NSArray<POPhotoItem *> *)items cache:(POScanCache *)cache progress:(POScanProgress)progress {
+- (void)findDuplicatesIn:(NSArray<POPhotoItem *> *)items caches:(NSDictionary<NSString *, POScanCache *> *)caches progress:(POScanProgress)progress {
     // Only files that share their size with another file can be identical, so only those get hashed.
     NSMutableDictionary<NSNumber *, NSMutableArray<POPhotoItem *> *> *bySize = [NSMutableDictionary dictionary];
     for (POPhotoItem *item in items) {
@@ -610,6 +641,7 @@ static void PODateFromTakeoutSidecars(NSArray<POPhotoItem *> *items, NSArray<NSU
     }
 
     [self forEach:candidates phase:POScanPhaseDuplicates progress:progress work:^(POPhotoItem *item) {
+        POScanCache *cache = caches[item.rootURL.path];
         item.contentHash = [cache hashOfItem:item];
         if (item.contentHash) return;
         item.contentHash = POHashFile(item.url, &self->_cancelled);

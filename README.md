@@ -6,8 +6,8 @@ nothing uploaded.**
 Photo Organizer is a small native app for macOS (Objective-C / AppKit) and Windows (C# / WPF) for the folder everyone
 has: a phone backup, a Google Takeout export, years of “Camera Uploads”. It finds out when every photo and video was
 really taken, shows the library the way Apple Photos does, finds duplicates and thumbnails, recognises objects and
-people, and — when you ask — moves the files into `2016/`, `2016/07 July/` or `2016-07-14/` folders. Files are
-**moved, never copied, renamed or re-encoded**, nothing is ever overwritten, and every move can be undone.
+people, and — when you ask — moves or copies the files into `2016/`, `2016/07 July/` or `2016-07-14/` folders. Files
+are **never renamed or re-encoded**, nothing is ever overwritten, and every move or copy can be undone.
 
 Both versions have the same window, the same date rules, the same folders and the same models. Everything runs
 locally. No cloud, no account, no subscription.
@@ -24,7 +24,7 @@ Get the latest build from [Releases](../../releases) — every change to `main` 
 
 | | macOS | Windows |
 |---|---|---|
-| File | `PhotoOrganizer-x.y.z.zip` | `PhotoOrganizer-Windows-x.y.z.zip` |
+| File | `PhotoOrganizer-macOS-x.y.z.zip` | `PhotoOrganizer-Windows-x.y.z.zip` |
 | System | macOS 12 Monterey or later, Apple Silicon or Intel | Windows 10 or 11, 64-bit |
 | Install | unzip, drag `PhotoOrganizer.app` to *Applications* | unzip anywhere, run `PhotoOrganizer.exe` — nothing to install |
 | Recognition | Vision and Core ML; MLX on Apple Silicon | ONNX Runtime on the graphics card (DirectML, any DirectX 12 card) or the processor |
@@ -47,10 +47,31 @@ models are downloaded the same way, nothing else is needed.
 
 ## Features
 
-- **Organize by date** — by year (default), month or day, with your own folder names and a preview of the result
-  where every folder can be renamed before anything moves.
+- **Move or copy** — move the originals into the folders, or leave them where they are and copy them, for example
+  from an old drive onto a backup drive. Year folders already on the destination are filled up; a file already copied
+  there (same name, size and date) is skipped, and another picture with the same name gets `name (2).jpg` — so the
+  copy can be run again at any time and only adds what is new.
+- **Organize into folders** — by date: year (default), month or day, with your own folder names and a preview of the
+  result where every folder can be renamed before anything moves. Or, first, by another key, with the date folders
+  inside or without them:
+  - **by type** — Screenshots, Screen Recordings, WhatsApp, Telegram, Viber, Instagram, Videos, Animations, Panoramas,
+    RAW, Photos (the media types Photos lists, told by the file's name, folder, format and proportions);
+  - **by person** — photos in which exactly one named person was recognised go to a folder with their name;
+  - **by format** — JPEG, HEIC, PNG, MOV…
+  - **Screenshots to a folder** of their own, whatever the rest is organized by: one folder with the dates inside
+    (`Screenshots/2024/…`) or one inside every date folder (`2024/Screenshots/…`). Duplicates and thumbnails likewise.
   - Files are moved with an atomic “never replace” rename: a name clash gets a new name, nothing is overwritten.
   - A progress bar, a journal of every move, and **Undo** that puts every file back.
+- **Arrange by type and by person** — the sidebar has **Types**: *Screenshots* and *Videos*. Screenshots are told
+  by what the file says — the name the system gave it (`Screenshot 2024-…`, `Снимок экрана…`), a folder of
+  screenshots, or a PNG the size of a phone, tablet or computer screen (iPhones name them `IMG_1234.PNG`).
+  - **Arrange…** on Screenshots, Videos, a person or an object filter puts everything shown into one folder named
+    after it (*Screenshots*, *Videos*, *Mum*…), all together or in folders by year, month or day inside.
+  - Such a folder is kept: organizing by date leaves its files where they are afterwards (the same goes for
+    *Move to Folder…*).
+- **Several folders at once** — open several folders (or drop them on the window), or add one with the folder-plus
+  button: they are scanned together, copies are found across them, and organizing puts everything into one folder —
+  the first one, or any other chosen under *Put into*.
 - **The real capture date**, not the date the file was copied:
   - EXIF for photos; QuickTime / MP4 metadata for videos (with the 1904 / 1970 epoch bugs of some cameras fixed);
   - a date in the file name (`IMG_20160714_…`, `20220909_145141.mp4`, `IMG-20160714-WA0001`, `Screenshot 2019-07-14…`);
@@ -67,7 +88,8 @@ models are downloaded the same way, nothing else is needed.
 - **Duplicates and thumbnails** — exact copies, resized and recompressed versions; *Remove Duplicates* keeps the
   best-quality file of each set and moves the rest to the Trash / Recycle Bin.
 - **Search**
-  - **by text**: what’s in the picture or a file name;
+  - **by text**: what’s in the picture, the text written in it (read on the device in Russian and English —
+    screenshots, documents, signs) or a file name;
   - **by photo**: drop a picture and get the visually similar ones;
   - **by object**: drop a photo, draw a frame around a thing (a dog, a car, a mug) and find the photos where
     *that* thing appears — by visual similarity, not by tags.
@@ -87,7 +109,7 @@ On Windows, Ctrl stands for ⌘ and Shift for ⇧.
 
 | Keys | Action |
 |---|---|
-| ⌘O | Open a folder (or drop one on the window) |
+| ⌘O / ⇧⌘O | Open folders (or drop them on the window) / add another folder |
 | ⌘↩ | Organize into folders… |
 | ⌘F / ⇧⌘F | Search / Search by photo |
 | ⌘↓ / ⌘↑ | Open in the viewer / back to the grid |
@@ -102,12 +124,14 @@ On Windows, Ctrl stands for ⌘ and Shift for ⇧.
 **macOS** — only the Xcode Command Line Tools are needed (`xcode-select --install`):
 
 ```bash
-./build.sh          # → build/PhotoOrganizer.app (universal, ad-hoc signed)
-./build.sh run      # build and launch
+./build.sh          # → /Applications/PhotoOrganizer.app (universal, ad-hoc signed)
+./build.sh run      # build, install and launch
 ./build.sh test     # core tests: dates, plan, duplicates, moves, undo
-./build.sh zip      # → build/PhotoOrganizer-<version>.zip
-./build.sh strings  # check that every Russian string has an English translation
+./build.sh zip      # → build/PhotoOrganizer-macOS-<version>.zip
 ```
+
+The app goes straight into Applications rather than into the project folder, which may be in iCloud Drive: synced,
+an app bundle turns into a pile of folders.
 
 **Windows** — PowerShell in the repository root; the .NET 10 SDK is installed for the current user if it is missing:
 
@@ -119,8 +143,9 @@ On Windows, Ctrl stands for ⌘ and Shift for ⇧.
 More about the Windows version: [WindowsApp/README.md](WindowsApp/README.md).
 
 **Releasing**: nothing is built or uploaded by hand. Every push to `main` makes GitHub Actions run the macOS tests,
-build both apps and publish them as release `v<VERSION>.<build number>` — `VERSION` in the repository root holds
-the major and minor version.
+build both apps and publish them as release `v<VERSION>`, with the version from the `VERSION` file in the repository
+root (local builds get the same one). While it stays the same, each push updates that release; change `VERSION` for a
+new one.
 
 ### How it works
 
@@ -165,9 +190,9 @@ MIT — see [LICENSE](LICENSE). Downloaded models keep their authors’ licenses
 Photo Organizer — небольшое нативное приложение для macOS (Objective-C / AppKit) и Windows (C# / WPF) для папки,
 которая есть у всех: бэкап телефона, выгрузка Google Takeout, годы «Camera Uploads». Оно выясняет, когда на самом
 деле снят каждый файл, показывает медиатеку как «Фото» от Apple, находит дубликаты и миниатюры, распознаёт объекты и
-людей и — когда вы попросите — раскладывает файлы по папкам `2016/`, `2016/07 Июль/` или `2016-07-14/`. Файлы
-**перемещаются, а не копируются, не переименовываются и не пережимаются**, ничего не перезаписывается, любое
-перемещение можно отменить.
+людей и — когда вы попросите — перемещает или копирует файлы в папки `2016/`, `2016/07 Июль/` или `2016-07-14/`.
+Файлы **не переименовываются и не пережимаются**, ничего не перезаписывается, любое перемещение или копирование
+можно отменить.
 
 У обеих версий одно и то же окно, те же правила дат, те же папки и те же модели. Всё работает локально: без облака,
 аккаунтов и подписок.
@@ -182,7 +207,7 @@ Photo Organizer — небольшое нативное приложение д�
 
 | | macOS | Windows |
 |---|---|---|
-| Файл | `PhotoOrganizer-x.y.z.zip` | `PhotoOrganizer-Windows-x.y.z.zip` |
+| Файл | `PhotoOrganizer-macOS-x.y.z.zip` | `PhotoOrganizer-Windows-x.y.z.zip` |
 | Система | macOS 12 Monterey или новее, Apple Silicon или Intel | Windows 10 или 11, 64-бит |
 | Установка | распаковать, перетащить `PhotoOrganizer.app` в «Программы» | распаковать в любую папку, запустить `PhotoOrganizer.exe` — устанавливать ничего не нужно |
 | Распознавание | Vision и Core ML; MLX на Apple Silicon | ONNX Runtime на видеокарте (DirectML, любая с DirectX 12) или на процессоре |
@@ -206,11 +231,32 @@ open /Applications/PhotoOrganizer.app
 
 ## Возможности
 
-- **Раскладка по датам** — по годам (по умолчанию), месяцам или дням, со своими названиями папок и предпросмотром,
-  где любую папку можно переименовать, пока ничего не перемещено.
+- **Переместить или скопировать** — оригиналы переезжают в папки или остаются на месте, а в папки кладутся копии —
+  например, со старого диска на диск для бэкапа. Папки годов, которые уже есть в месте назначения, пополняются; файл,
+  который там уже есть (то же имя, размер и дата), пропускается, а другое фото с тем же именем получает имя
+  `имя (2).jpg` — поэтому копирование можно запускать повторно, и оно добавит только новое.
+- **Раскладка по папкам** — по датам: годам (по умолчанию), месяцам или дням, со своими названиями папок и
+  предпросмотром, где любую папку можно переименовать, пока ничего не перемещено. Или сначала по другому признаку — с
+  папками дат внутри или без них:
+  - **по типам** — скриншоты, записи экрана, WhatsApp, Telegram, Viber, Instagram, видео, анимации, панорамы, RAW,
+    фото (типы медиа, как в «Фото», по имени файла, папке, формату и пропорциям);
+  - **по людям** — фото, где узнан ровно один названный человек, попадают в папку с его именем;
+  - **по форматам** — JPEG, HEIC, PNG, MOV…
+  - **Скриншоты — в отдельную папку** при любой раскладке: одна папка с датами внутри (`Скриншоты/2024/…`) или
+    внутри папки каждой даты (`2024/Скриншоты/…`). Так же — дубликаты и миниатюры.
   - Перемещение — атомарное переименование «без замены»: при совпадении имён файл получает новое имя, ничего не
     перезаписывается.
   - Прогресс, журнал всех перемещений и **отмена**, которая возвращает каждый файл на место.
+- **Раскладка по типам и по людям** — в боковой панели раздел **«Типы»**: *«Скриншоты»* и *«Видео»*. Скриншоты
+  узнаются по тому, что говорит сам файл: имя, которое дала система (`Screenshot 2024-…`, `Снимок экрана…`), папка
+  скриншотов или PNG размером с экран телефона, планшета или компьютера (iPhone называет их `IMG_1234.PNG`).
+  - **«Разложить…»** в «Скриншотах», «Видео», у человека или фильтра объектов складывает всё показанное в одну папку
+    с его названием («Скриншоты», «Видео», «Мама»…) — всё вместе или по папкам годов, месяцев или дней внутри.
+  - Такая папка закрепляется: общая раскладка по датам потом оставляет её файлы на месте (так же и после
+    «Переместить в папку…»).
+- **Несколько папок сразу** — откройте несколько папок (или перетащите их на окно) или добавьте ещё одну кнопкой с
+  плюсом: они сканируются вместе, дубликаты ищутся между ними, а раскладка складывает всё в одну папку — первую или
+  любую другую, выбранную в строке «Куда сложить».
 - **Настоящая дата съёмки**, а не дата копирования:
   - EXIF у фото; метаданные QuickTime / MP4 у видео (с исправлением ошибок эпохи 1904 / 1970 у некоторых камер);
   - дата в имени файла (`IMG_20160714_…`, `20220909_145141.mp4`, `IMG-20160714-WA0001`, `Screenshot 2019-07-14…`);
@@ -226,7 +272,8 @@ open /Applications/PhotoOrganizer.app
 - **Дубликаты и миниатюры** — точные копии, уменьшенные и пережатые версии; *«Удалить дубликаты»* оставляет файл
   лучшего качества из каждого набора, остальные перемещает в Корзину.
 - **Поиск**
-  - **по тексту**: что на снимке или имя файла;
+  - **по тексту**: что на снимке, написанный на нём текст (читается на устройстве, по-русски и по-английски —
+    скриншоты, документы, вывески) или имя файла;
   - **по фото**: перетащите снимок — найдутся похожие;
   - **по предмету**: перетащите фото, обведите рамкой предмет (собаку, машину, кружку) — найдутся снимки, где есть
     *именно он*, по визуальному сходству, а не по тегам.
@@ -246,7 +293,7 @@ open /Applications/PhotoOrganizer.app
 
 | Клавиши | Действие |
 |---|---|
-| ⌘O | Открыть папку (или перетащите её на окно) |
+| ⌘O / ⇧⌘O | Открыть папки (или перетащите их на окно) / добавить ещё папку |
 | ⌘↩ | Разложить по папкам… |
 | ⌘F / ⇧⌘F | Поиск / Поиск по фото |
 | ⌘↓ / ⌘↑ | Открыть в просмотре / вернуться к сетке |
@@ -261,11 +308,14 @@ open /Applications/PhotoOrganizer.app
 **macOS** — нужны только Command Line Tools (`xcode-select --install`), Xcode не обязателен:
 
 ```bash
-./build.sh          # → build/PhotoOrganizer.app (универсальная сборка)
-./build.sh run      # собрать и запустить
+./build.sh          # → /Applications/PhotoOrganizer.app (универсальная сборка)
+./build.sh run      # собрать, установить и запустить
 ./build.sh test     # тесты ядра: даты, план, дубликаты, перемещения, отмена
-./build.sh zip      # → build/PhotoOrganizer-<версия>.zip
+./build.sh zip      # → build/PhotoOrganizer-macOS-<версия>.zip
 ```
+
+Приложение ставится сразу в «Программы», а не в папку проекта, которая может лежать в iCloud Drive: при
+синхронизации приложение превращается в кучу папок.
 
 **Windows** — PowerShell в корне репозитория; .NET 10 SDK ставится для текущего пользователя, если его нет:
 
@@ -277,8 +327,8 @@ open /Applications/PhotoOrganizer.app
 Подробнее о Windows-версии — [WindowsApp/README.md](WindowsApp/README.md).
 
 **Релиз**: вручную ничего не собирается и не загружается. При каждом пуше в `main` GitHub Actions прогоняет тесты,
-собирает обе версии и публикует релиз `v<VERSION>.<номер сборки>`; в файле `VERSION` в корне — старшая и младшая
-часть версии.
+собирает обе версии и публикует релиз `v<VERSION>` с версией из файла `VERSION` в корне (у локальной сборки та же).
+Пока версия не меняется, каждый пуш обновляет этот релиз; для нового релиза поменяйте `VERSION`.
 
 ## Где хранятся данные
 

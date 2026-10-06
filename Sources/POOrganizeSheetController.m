@@ -6,6 +6,13 @@
 
 @implementation POOrganizeSheetController {
     POPlan *_plan;
+    NSTextField *_destinationLabel;
+    NSSegmentedControl *_modeControl;
+    NSPopUpButton *_arrangementPopup;
+    NSButton *_datesInsideCheckbox;
+    NSButton *_screenshotsCheckbox;
+    NSTextField *_screenshotsField;
+    NSPopUpButton *_screenshotsPlacePopup;
     NSPopUpButton *_schemePopup;
     NSPopUpButton *_yearPopup;
     NSPopUpButton *_monthPopup;
@@ -55,10 +62,33 @@ static NSTextField *POFormLabel(NSString *text) {
 - (void)loadView {
     NSTextField *title = [NSTextField labelWithString:POL(@"Разложить по папкам")];
     title.font = [NSFont systemFontOfSize:15 weight:NSFontWeightSemibold];
-    NSTextField *subtitle = [NSTextField wrappingLabelWithString:
-        [NSString stringWithFormat:POL(@"Папки будут созданы внутри «%@». Выберите, как группировать файлы и как назвать папки."), _plan.rootURL.lastPathComponent]];
+    NSTextField *subtitle = [NSTextField wrappingLabelWithString:_plan.sourceURLs.count > 1
+        ? [NSString stringWithFormat:POL(@"Файлы из %@ будут сложены в одну папку. Выберите, куда, как группировать файлы и как назвать папки."),
+           POCount(_plan.sourceURLs.count, POL(@"папки"), POL(@"папок"), POL(@"папок"))]
+        : POL(@"Выберите, куда сложить файлы, как их группировать и как назвать папки.")];
     subtitle.textColor = NSColor.secondaryLabelColor;
+    // Where everything goes: the library's first folder, or another one.
+    _destinationLabel = [NSTextField labelWithString:_plan.rootURL.path.stringByAbbreviatingWithTildeInPath];
+    _destinationLabel.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+    _destinationLabel.lineBreakMode = NSLineBreakByTruncatingHead;
+    [_destinationLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSButton *changeDestination = [NSButton buttonWithTitle:POL(@"Изменить…") target:self action:@selector(chooseDestination:)];
+    _modeControl = [NSSegmentedControl segmentedControlWithLabels:@[POL(@"Переместить"), POL(@"Копировать")]
+                                                    trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(modeChanged:)];
+    _modeControl.toolTip = POL(@"Переместить — оригиналы переезжают в новые папки. Копировать — оригиналы остаются на месте, "
+                               @"в папках появляются их копии (на диске APFS копии почти не занимают места).");
+    NSView *spacer = [NSView new];
+    [spacer setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSStackView *destination = [NSStackView stackViewWithViews:@[[NSTextField labelWithString:POL(@"Куда сложить:")], _destinationLabel,
+                                                                 changeDestination, spacer, _modeControl]];
+    destination.spacing = 8;
 
+    _arrangementPopup = [self popupWithTitles:@[POL(@"По датам"), POL(@"По типам"), POL(@"По людям"), POL(@"По форматам")]];
+    _arrangementPopup.toolTip = POL(@"По типам: скриншоты, записи экрана, WhatsApp, Telegram, видео, анимации, панорамы, RAW, фото. По людям: фото, где узнан ровно один названный человек, — в папку с его именем, остальное по датам. По форматам: JPEG, HEIC, PNG, MOV…");
+    _datesInsideCheckbox = [NSButton checkboxWithTitle:POL(@"Внутри — по датам") target:self action:@selector(optionChanged:)];
+    _screenshotsCheckbox = [NSButton checkboxWithTitle:POL(@"Скриншоты — в папку:") target:self action:@selector(optionChanged:)];
+    _screenshotsField = [self folderField];
+    _screenshotsPlacePopup = [self popupWithTitles:@[POL(@"Одна папка, даты внутри"), POL(@"Внутри папки каждой даты")]];
     _schemePopup = [self popupWithTitles:@[POL(@"По годам"), POL(@"По месяцам"), POL(@"По дням")]];
     _yearPopup = [self popupWithTitles:@[@"2024", POL(@"2024 год")]];
     _monthPopup = [self popupWithTitles:@[@"2024-03", POL(@"2024-03 Март"), POL(@"03 Март"), POL(@"Март 2024")]];
@@ -70,11 +100,15 @@ static NSTextField *POFormLabel(NSString *text) {
     _tinyField = [self folderField];
 
     NSGridView *form = [NSGridView gridViewWithViews:@[
+        @[POFormLabel(POL(@"Раскладывать:")), _arrangementPopup],
+        @[NSGridCell.emptyContentView, _datesInsideCheckbox],
         @[POFormLabel(POL(@"Группировать:")), _schemePopup],
         @[POFormLabel(POL(@"Название года:")), _yearPopup],
         @[POFormLabel(POL(@"Название месяца:")), _monthPopup],
         @[POFormLabel(POL(@"Название дня:")), _dayPopup],
         @[NSGridCell.emptyContentView, _nestedCheckbox],
+        @[_screenshotsCheckbox, _screenshotsField],
+        @[NSGridCell.emptyContentView, _screenshotsPlacePopup],
         @[_duplicatesCheckbox, _duplicatesField],
         @[_tinyCheckbox, _tinyField],
     ]];
@@ -132,7 +166,7 @@ static NSTextField *POFormLabel(NSString *text) {
     [_summaryLabel setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_summaryLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSStackView *stack = [NSStackView stackViewWithViews:@[title, subtitle, form, previewHeader, scrollView, hint, footer]];
+    NSStackView *stack = [NSStackView stackViewWithViews:@[title, subtitle, destination, form, previewHeader, scrollView, hint, footer]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
     stack.spacing = 10;
@@ -142,7 +176,7 @@ static NSTextField *POFormLabel(NSString *text) {
     [stack setCustomSpacing:18 afterView:form];
     [stack setCustomSpacing:6 afterView:scrollView];
     [stack setCustomSpacing:16 afterView:hint];
-    for (NSView *wide in @[subtitle, previewHeader, scrollView, hint, footer]) {
+    for (NSView *wide in @[subtitle, destination, previewHeader, scrollView, hint, footer]) {
         [wide.widthAnchor constraintEqualToAnchor:stack.widthAnchor constant:-40].active = YES;
     }
     [stack.widthAnchor constraintEqualToConstant:600].active = YES;
@@ -150,9 +184,33 @@ static NSTextField *POFormLabel(NSString *text) {
     [self refresh];
 }
 
+- (void)chooseDestination:(id)sender {
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseDirectories = YES;
+    panel.canChooseFiles = NO;
+    panel.canCreateDirectories = YES;
+    panel.message = POL(@"Куда сложить файлы");
+    panel.prompt = POL(@"Выбрать");
+    panel.directoryURL = _plan.rootURL;
+    [panel beginSheetModalForWindow:self.view.window completionHandler:^(NSModalResponse response) {
+        if (response != NSModalResponseOK || !panel.URL) return;
+        [self->_plan setDestinationURL:panel.URL];
+        self->_destinationLabel.stringValue = self->_plan.rootURL.path.stringByAbbreviatingWithTildeInPath;
+        [self planChanged];
+    }];
+}
+
 #pragma mark - Model ↔ controls
 
 - (void)refresh {
+    [_arrangementPopup selectItemAtIndex:_plan.arrangement];
+    _datesInsideCheckbox.state = _plan.datesInside ? NSControlStateValueOn : NSControlStateValueOff;
+    _datesInsideCheckbox.enabled = _plan.arrangement != POArrangementDate;
+    _screenshotsCheckbox.state = _plan.separateScreenshots ? NSControlStateValueOn : NSControlStateValueOff;
+    _screenshotsField.stringValue = _plan.screenshotsFolderName;
+    _screenshotsField.enabled = _plan.separateScreenshots;
+    [_screenshotsPlacePopup selectItemAtIndex:_plan.screenshotsInEachDate ? 1 : 0];
+    _screenshotsPlacePopup.enabled = _plan.separateScreenshots;
     [_schemePopup selectItemAtIndex:_plan.scheme];
     [_yearPopup selectItemAtIndex:_plan.yearStyle];
     [_monthPopup selectItemAtIndex:_plan.monthStyle];
@@ -170,14 +228,23 @@ static NSTextField *POFormLabel(NSString *text) {
     _resetButton.hidden = !_plan.hasCustomNames;
     [_tableView reloadData];
 
+    BOOL copies = _plan.copiesFiles;
+    _modeControl.selectedSegment = copies ? 1 : 0;
     NSUInteger pending = _plan.pendingItems.count;
     NSString *what = pending
-        ? [NSString stringWithFormat:POL(@"Будет перемещено %@ из %@ в %@."), PONumber(pending), PONumber(_plan.items.count),
-           POCount(_plan.groups.count, POL(@"папку"), POL(@"папки"), POL(@"папок"))]
+        ? [NSString stringWithFormat:copies ? POL(@"Будет скопировано %@ из %@ в %@.") : POL(@"Будет перемещено %@ из %@ в %@."),
+           PONumber(pending), PONumber(_plan.items.count), POCount(_plan.groups.count, POL(@"папку"), POL(@"папки"), POL(@"папок"))]
         : POL(@"Все файлы уже лежат на своих местах.");
-    _summaryLabel.stringValue = [what stringByAppendingString:
-        POL(@" Оригиналы перемещаются, а не копируются; ничего не удаляется и не перезаписывается. Отменить — ⌘Z.")];
+    _summaryLabel.stringValue = [what stringByAppendingString:copies
+        ? POL(@" Оригиналы остаются на месте; копии ничего не перезаписывают, уже скопированные файлы пропускаются. Отменить — ⌘Z.")
+        : POL(@" Оригиналы перемещаются, а не копируются; ничего не удаляется и не перезаписывается. Отменить — ⌘Z.")];
+    _confirmButton.title = copies ? POL(@"Скопировать") : POL(@"Разложить");
     _confirmButton.enabled = pending > 0;
+}
+
+- (void)modeChanged:(id)sender {
+    _plan.copiesFiles = _modeControl.selectedSegment == 1;
+    [self planChanged];
 }
 
 - (void)planChanged {
@@ -188,6 +255,11 @@ static NSTextField *POFormLabel(NSString *text) {
 }
 
 - (void)optionChanged:(id)sender {
+    _plan.arrangement = _arrangementPopup.indexOfSelectedItem;
+    _plan.datesInside = _datesInsideCheckbox.state == NSControlStateValueOn;
+    _plan.separateScreenshots = _screenshotsCheckbox.state == NSControlStateValueOn;
+    _plan.screenshotsInEachDate = _screenshotsPlacePopup.indexOfSelectedItem == 1;
+    _plan.screenshotsFolderName = _screenshotsField.stringValue;
     _plan.scheme = _schemePopup.indexOfSelectedItem;
     _plan.yearStyle = _yearPopup.indexOfSelectedItem;
     _plan.monthStyle = _monthPopup.indexOfSelectedItem;

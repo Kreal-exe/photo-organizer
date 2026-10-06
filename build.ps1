@@ -12,8 +12,8 @@ param([string]$Command = "build")
 $ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot
 
-# VERSION holds major.minor; a release adds its build number, a local build ".0".
-$Version = if ($env:VERSION) { $env:VERSION } else { "$((Get-Content (Join-Path $PSScriptRoot "VERSION")).Trim()).0" }
+# The version is the one in VERSION, the same here and in the GitHub release.
+$Version = if ($env:VERSION) { $env:VERSION } else { (Get-Content (Join-Path $PSScriptRoot "VERSION")).Trim() }
 $Project = Join-Path $PSScriptRoot "WindowsApp\PhotoOrganizer\PhotoOrganizer.csproj"
 $Output = Join-Path $PSScriptRoot "build"
 $App = Join-Path $Output "PhotoOrganizer-Windows"

@@ -13,6 +13,7 @@
 #import "POPeople.h"
 #import "POSimilarCopies.h"
 #import "POSimilaritySearch.h"
+#import "POScreenshots.h"
 #import "POPhotoSearchWindowController.h"
 #import "POManualDates.h"
 #import "PODateSuggestions.h"
@@ -21,6 +22,7 @@
 #import "POObjectPickerController.h"
 
 static NSToolbarItemIdentifier const POToolbarOpen = @"open";
+static NSToolbarItemIdentifier const POToolbarAddFolder = @"addFolder";
 static NSToolbarItemIdentifier const POToolbarRescan = @"rescan";
 static NSToolbarItemIdentifier const POToolbarReveal = @"reveal";
 static NSToolbarItemIdentifier const POToolbarScheme = @"scheme";
@@ -40,7 +42,9 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
     POContentViewController *_content;
     NSToolbarItemGroup *_schemeItem;
 
-    NSURL *_rootURL;
+    NSURL *_rootURL;                      // the library's first folder
+    NSArray<NSURL *> *_rootURLs;          // all of them: several folders can be organized together
+    NSURL *_destinationURL;               // where organizing puts everything, when not the first folder
     POScanner *_scanner;      // non-nil while a scan is running
     POPlan *_plan;
     BOOL _organizing;         // files are being moved (or moved back)
@@ -128,7 +132,7 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarDefaultItemIdentifiers:(NSToolbar *)toolbar {
     return @[NSToolbarToggleSidebarItemIdentifier, NSToolbarSidebarTrackingSeparatorItemIdentifier,
-             POToolbarOpen, POToolbarRescan, POToolbarReveal, NSToolbarFlexibleSpaceItemIdentifier, POToolbarScheme, POToolbarSearch];
+             POToolbarOpen, POToolbarAddFolder, POToolbarRescan, POToolbarReveal, NSToolbarFlexibleSpaceItemIdentifier, POToolbarScheme, POToolbarSearch];
 }
 
 - (NSArray<NSToolbarItemIdentifier> *)toolbarAllowedItemIdentifiers:(NSToolbar *)toolbar {
@@ -164,6 +168,7 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
 
     NSDictionary<NSToolbarItemIdentifier, NSArray *> *specs = @{
         POToolbarOpen: @[POL(@"Открыть папку"), @"folder", NSStringFromSelector(@selector(openDocument:))],
+        POToolbarAddFolder: @[POL(@"Добавить папку"), @"folder.badge.plus", NSStringFromSelector(@selector(addFolder:))],
         POToolbarRescan: @[POL(@"Пересканировать"), @"arrow.clockwise", NSStringFromSelector(@selector(rescan:))],
         POToolbarReveal: @[POL(@"Показать в Finder"), @"arrow.up.forward.app", NSStringFromSelector(@selector(revealRootInFinder:))],
     };
@@ -191,6 +196,8 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
     if (action == @selector(openDocument:)) return !_organizing;
     if (action == @selector(rescan:)) return _rootURL && !_scanner && !_organizing;
     if (action == @selector(revealRootInFinder:)) return _rootURL != nil;
+    if (action == @selector(addFolder:)) return !_organizing && !_scanner;
+    if (action == @selector(removeFolder:)) return _rootURLs.count > 1 && !_organizing && !_scanner;
     if (action == @selector(organize:)) return [self canOrganize];
     if (action == @selector(focusSearch:)) return _plan != nil;
     if (action == @selector(removeDuplicates:)) return _plan && !_scanner && !_organizing && (_plan.duplicateItems.count || _copySets.count || _plan.tinyItems.count);
@@ -212,6 +219,7 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
     }
     if (action == @selector(findObjectInSelection:)) return idle && _content.grid.selectedItems.count == 1 && !_content.grid.selectedItems.firstObject.isVideo;
     if (action == @selector(pickAnotherObject:)) return _objectExampleURL != nil && !self.window.attachedSheet;
+    if (action == @selector(arrangeShown:)) return idle && _content.grid.allItems.count > 0 && !self.window.attachedSheet;
     if (action == @selector(findSimilarToSelection:)) return idle && _content.grid.selectedItems.count == 1 && !_content.grid.selectedItems.firstObject.isVideo;
     if (action == @selector(openSelectedItem:)) return _content.showsResults && _plan.items.count > 0;
     if (action == @selector(closeViewer:)) return _content.showsViewer;
@@ -228,22 +236,75 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
     NSOpenPanel *panel = [NSOpenPanel openPanel];
     panel.canChooseDirectories = YES;
     panel.canChooseFiles = NO;
-    panel.allowsMultipleSelection = NO;
-    panel.message = POL(@"Выберите папку с фото и видео");
+    panel.allowsMultipleSelection = YES;
+    panel.message = POL(@"Выберите папку с фото и видео (можно несколько)");
     panel.prompt = POL(@"Сканировать");
     if (_rootURL) panel.directoryURL = _rootURL;
     [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
-        if (response == NSModalResponseOK && panel.URL) [self loadFolder:panel.URL];
+        if (response == NSModalResponseOK && panel.URLs.count) [self loadFolders:panel.URLs];
+    }];
+}
+
+/// Another folder into the library: several folders are scanned and organized together.
+- (IBAction)addFolder:(id)sender {
+    if (_organizing || self.window.attachedSheet) return;
+    if (!_rootURLs.count) {
+        [self openDocument:sender];
+        return;
+    }
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseDirectories = YES;
+    panel.canChooseFiles = NO;
+    panel.allowsMultipleSelection = YES;
+    panel.message = POL(@"Добавить папку к разбору");
+    panel.prompt = POL(@"Добавить");
+    panel.directoryURL = _rootURLs.lastObject.URLByDeletingLastPathComponent;
+    [panel beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+        if (response == NSModalResponseOK && panel.URLs.count) [self loadFolders:[self->_rootURLs arrayByAddingObjectsFromArray:panel.URLs] keepDestination:YES];
+    }];
+}
+
+/// Takes one of the library's folders out of it (Файл → Убрать папку из разбора…).
+- (IBAction)removeFolder:(id)sender {
+    if (_rootURLs.count < 2 || _organizing || self.window.attachedSheet) return;
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = POL(@"Убрать папку из разбора");
+    alert.informativeText = POL(@"Папка и файлы в ней остаются на месте — их просто перестанут показывать и раскладывать.");
+    NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 320, 26) pullsDown:NO];
+    for (NSURL *url in _rootURLs) [popup addItemWithTitle:url.path.stringByAbbreviatingWithTildeInPath];
+    alert.accessoryView = popup;
+    [alert addButtonWithTitle:POL(@"Убрать")];
+    [alert addButtonWithTitle:POL(@"Отмена")];
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+        if (response != NSAlertFirstButtonReturn) return;
+        NSMutableArray<NSURL *> *left = [self->_rootURLs mutableCopy];
+        [left removeObjectAtIndex:(NSUInteger)popup.indexOfSelectedItem];
+        [self loadFolders:left keepDestination:YES];
     }];
 }
 
 - (void)loadFolder:(NSURL *)url {
-    if (_organizing) return;
-    NSNumber *isDirectory = nil;
-    [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:NULL];
-    if (!isDirectory.boolValue) url = url.URLByDeletingLastPathComponent;
+    [self loadFolders:@[url] keepDestination:NO];
+}
 
-    if (![url isEqual:_rootURL]) {
+- (void)loadFolders:(NSArray<NSURL *> *)urls {
+    [self loadFolders:urls keepDestination:NO];
+}
+
+- (void)loadFolders:(NSArray<NSURL *> *)urls keepDestination:(BOOL)keepDestination {
+    if (_organizing) return;
+    NSMutableArray<NSURL *> *folders = [NSMutableArray array];
+    for (NSURL *url in urls) {
+        NSNumber *isDirectory = nil;
+        [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:NULL];
+        [folders addObject:isDirectory.boolValue ? url : url.URLByDeletingLastPathComponent];
+    }
+    NSArray<NSURL *> *roots = [POScanner normalizedRootURLs:folders];
+    if (!roots.count) return;
+    NSURL *url = roots.firstObject;
+    if (!keepDestination) _destinationURL = nil;
+
+    if (![[roots valueForKey:@"path"] isEqualToArray:[_rootURLs valueForKey:@"path"] ?: @[]]) {
         // Undoing a move in a folder that is no longer on screen would be surprising.
         [self.window.undoManager removeAllActions];
         _plan = nil;
@@ -258,7 +319,8 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
         _lastMessage = nil;
     }
     _rootURL = url;
-    [NSDocumentController.sharedDocumentController noteNewRecentDocumentURL:url];
+    _rootURLs = roots;
+    for (NSURL *root in roots) [NSDocumentController.sharedDocumentController noteNewRecentDocumentURL:root];
     [self startScan];
 }
 
@@ -267,7 +329,8 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
 }
 
 - (IBAction)revealRootInFinder:(id)sender {
-    if (_rootURL) [NSWorkspace.sharedWorkspace openURL:_rootURL];
+    NSURL *folder = _plan.rootURL ?: _rootURL;
+    if (folder) [NSWorkspace.sharedWorkspace openURL:folder];
 }
 
 #pragma mark - Scanning
@@ -279,8 +342,8 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
     [_scanner cancel];
     // Until the scan and the recognition after it are through, the folder is opened again at the next launch, and
     // both go on from where they stopped (the scan cache and the analysis cache).
-    [NSUserDefaults.standardUserDefaults setObject:_rootURL.path forKey:POUnfinishedFolderKey];
-    POScanner *scanner = [[POScanner alloc] initWithRootURL:_rootURL];
+    [NSUserDefaults.standardUserDefaults setObject:[_rootURLs valueForKey:@"path"] forKey:POUnfinishedFolderKey];
+    POScanner *scanner = [[POScanner alloc] initWithRootURLs:_rootURLs ?: @[_rootURL]];
     scanner.deprioritizedFolders = @[POPlan.savedDuplicatesFolderName];
     _scanner = scanner;
     [_content showProgressWithText:POL(@"Поиск фото и видео…") fraction:-1 cancellable:YES];
@@ -318,6 +381,8 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
     _scanner = nil;
     if (items) {
         _plan = [[POPlan alloc] initWithRootURL:scanner.rootURL items:items];
+        _plan.sourceURLs = scanner.rootURLs;
+        if (_destinationURL) [_plan setDestinationURL:_destinationURL];
         [_plan loadOptionsFromDefaults];
         [self planDidChange];
         [self startAnalysis];
@@ -330,7 +395,10 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
     [_scanner cancel];
     _scanner = nil;
     [NSUserDefaults.standardUserDefaults removeObjectForKey:POUnfinishedFolderKey];
-    if (!_plan) _rootURL = nil;
+    if (!_plan) {
+        _rootURL = nil;
+        _rootURLs = nil;
+    }
     [self updateUI];
 }
 
@@ -358,6 +426,8 @@ NSString *const POUnfinishedFolderKey = @"POUnfinishedFolder";
     _sidebar.suggestedCount = (NSInteger)suggested;
     _sidebar.undatedCount = (NSInteger)undated;
     _sidebar.locatedCount = (NSInteger)[[_plan.items valueForKeyPath:@"@sum.hasLocation"] unsignedIntegerValue];
+    _sidebar.screenshotCount = (NSInteger)[self screenshotsIn:_plan.items].count;
+    _sidebar.videoCount = (NSInteger)[[_plan.items valueForKeyPath:@"@sum.video"] unsignedIntegerValue];
     NSMutableArray<NSDictionary *> *objectFilters = [NSMutableArray array];
     for (NSString *query in [self savedObjectFilters]) {
         [objectFilters addObject:@{@"query": query, @"count": @([self itemsIn:_plan.items matchingQuery:query].count)}];
@@ -534,8 +604,16 @@ static NSArray<POGridSection *> *POSectionsByFolder(NSArray<POPhotoItem *> *item
         case POFilterKindNudity: return [self explicitItemsIn:_plan.items];
         case POFilterKindTiny: return _plan.tinyItems;
         case POFilterKindDuplicates: return nil;
+        case POFilterKindScreenshots: return [self screenshotsIn:_plan.items];
+        case POFilterKindVideos: return [_plan.items filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"video == YES"]];
     }
     return @[];
+}
+
+- (NSArray<POPhotoItem *> *)screenshotsIn:(NSArray<POPhotoItem *> *)items {
+    return [items filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(POPhotoItem *item, NSDictionary *bindings) {
+        return POIsScreenshot(item);
+    }]];
 }
 
 - (void)updateGrid {
@@ -557,6 +635,8 @@ static NSArray<POGridSection *> *POSectionsByFolder(NSArray<POPhotoItem *> *item
         case POFilterKindObject:
         case POFilterKindPerson:
         case POFilterKindMap:
+        case POFilterKindScreenshots:
+        case POFilterKindVideos:
             [sections addObjectsFromArray:POSectionsByDate(items, [self grouping])];
             break;
         case POFilterKindObjectSearch:
@@ -638,8 +718,14 @@ static NSArray<POGridSection *> *POSectionsByFolder(NSArray<POPhotoItem *> *item
     } else {
         _content.grid.onImageDropped = nil;
     }
-    [_content setExtraButtonTitle:filter.kind == POFilterKindObjectSearch && _objectExampleURL ? POL(@"Выделить другой предмет…") : nil
-                           action:@selector(pickAnotherObject:)];
+    // Screenshots, videos, a person, an object filter: "Разложить…" puts what is shown into a folder of its own.
+    BOOL arrangeable = (filter.kind == POFilterKindScreenshots || filter.kind == POFilterKindVideos || filter.kind == POFilterKindPerson
+                        || filter.kind == POFilterKindObject) && items.count > 0;
+    if (filter.kind == POFilterKindObjectSearch && _objectExampleURL) {
+        [_content setExtraButtonTitle:POL(@"Выделить другой предмет…") action:@selector(pickAnotherObject:)];
+    } else {
+        [_content setExtraButtonTitle:arrangeable ? POL(@"Разложить…") : nil action:@selector(arrangeShown:)];
+    }
     [_content setSoloCheckboxVisible:filter.kind == POFilterKindPerson on:[NSUserDefaults.standardUserDefaults boolForKey:POSoloPersonKey]];
     BOOL canAccept = NO;
     if (undatedView) {
@@ -1276,7 +1362,66 @@ static NSString *const POObjectFiltersKey = @"objectFilters";
     [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
         NSString *folder = [POPlan sanitizedFolderPath:field.stringValue];
         if (response != NSAlertFirstButtonReturn || !folder) return;
+        // Put there by hand: organizing by date leaves the folder alone from now on.
+        [self->_plan keepFolder:folder];
         [self moveItems:items toFolder:folder];
+    }];
+}
+
+/// "Разложить…" of a section — screenshots, videos, a person, an object: everything shown into one folder named
+/// after it, together or by year, month or day inside. The folder is kept out of organizing by date afterwards.
+- (IBAction)arrangeShown:(id)sender {
+    NSArray<POPhotoItem *> *items = _content.grid.allItems;
+    if (!items.count || !_plan || _scanner || _organizing || self.window.attachedSheet) return;
+    POFilter *filter = _sidebar.selectedFilter;
+    NSString *name = filter.kind == POFilterKindScreenshots ? POL(@"Скриншоты")
+                   : filter.kind == POFilterKindVideos ? POL(@"Видео")
+                   : [self suggestedFolderName];
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = POL(@"Разложить по папке");
+    alert.informativeText = [NSString stringWithFormat:POL(@"%@ будут перемещены в папку внутри «%@». Потом общая раскладка по датам эту папку не трогает."),
+                             POFilesDetail(items.count), _plan.rootURL.lastPathComponent];
+    NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 34, 280, 24)];
+    field.stringValue = name;
+    field.placeholderString = POL(@"Название папки");
+    NSPopUpButton *layout = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(-2, 0, 284, 26) pullsDown:NO];
+    [layout addItemsWithTitles:@[POL(@"Все файлы вместе"), POL(@"По годам"), POL(@"По месяцам"), POL(@"По дням")]];
+    [layout selectItemAtIndex:MIN(MAX([NSUserDefaults.standardUserDefaults integerForKey:@"arrangeLayout"], 0), 3)];
+    NSView *accessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 280, 58)];
+    [accessory addSubview:field];
+    [accessory addSubview:layout];
+    alert.accessoryView = accessory;
+    [alert addButtonWithTitle:POL(@"Разложить")];
+    [alert addButtonWithTitle:POL(@"Отмена")];
+    alert.window.initialFirstResponder = field;
+    [alert beginSheetModalForWindow:self.window completionHandler:^(NSModalResponse response) {
+        NSString *folder = [POPlan sanitizedFolderPath:field.stringValue];
+        if (response != NSAlertFirstButtonReturn || !folder || !self->_plan || self->_organizing) return;
+        POFolderLayout chosen = (POFolderLayout)MAX(layout.indexOfSelectedItem, 0);
+        [NSUserDefaults.standardUserDefaults setInteger:chosen forKey:@"arrangeLayout"];
+        POPlan *plan = self->_plan;
+        [plan keepFolder:folder];
+        self->_organizing = YES;
+        [self->_content showProgressWithText:POL(@"Перемещение файлов…") fraction:0 cancellable:NO];
+        [self updateUI];
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            // The folders are worked out first, on the plan's own options (the month and day names).
+            NSMutableDictionary<NSValue *, NSString *> *folders = [NSMutableDictionary dictionary];
+            dispatch_sync(dispatch_get_main_queue(), ^{
+                for (POPhotoItem *item in items) folders[[NSValue valueWithNonretainedObject:item]] = [plan folderForItem:item inFolder:folder layout:chosen];
+            });
+            POOrganizeResult *result = [POOrganizer moveItems:items rootURL:plan.rootURL progress:^(NSUInteger done, NSUInteger total) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    NSString *text = [NSString stringWithFormat:POL(@"Перемещение файлов: %@ из %@"), PONumber(done), PONumber(total)];
+                    [self->_content showProgressWithText:text fraction:(double)done / total cancellable:NO];
+                });
+            } folder:^NSString *(POPhotoItem *item) {
+                return folders[[NSValue valueWithNonretainedObject:item]];
+            }];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self didFinishMoveWithResult:result rootURL:plan.rootURL actionName:[NSString stringWithFormat:POL(@"перемещение в «%@»"), folder]];
+            });
+        });
     }];
 }
 
@@ -1321,6 +1466,16 @@ static NSString *const POObjectFiltersKey = @"objectFilters";
     [self regroupCopies];
 }
 
+/// YES when `url` lies in one of the library's folders.
+- (BOOL)isInsideLibrary:(NSURL *)url {
+    NSString *path = url.URLByStandardizingPath.path;
+    for (NSURL *root in _rootURLs) {
+        NSString *prefix = [root.URLByStandardizingPath.path stringByAppendingString:@"/"];
+        if ([path compare:prefix options:NSCaseInsensitiveSearch range:NSMakeRange(0, MIN(path.length, prefix.length))] == NSOrderedSame) return YES;
+    }
+    return NO;
+}
+
 /// Common ending of every operation that moves files: undo, journal, status line, refresh, error report.
 - (void)didFinishMoveWithResult:(POOrganizeResult *)result rootURL:(NSURL *)rootURL actionName:(NSString *)actionName {
     _organizing = NO;
@@ -1331,6 +1486,20 @@ static NSString *const POObjectFiltersKey = @"objectFilters";
         }];
         [undoManager setActionName:actionName];
         [POOrganizer writeJournalForResult:result rootURL:rootURL];
+    }
+    if (result.copied) {
+        NSMutableString *message = [NSMutableString stringWithFormat:POL(@"Готово: %@ %@"),
+                                    POPlural(result.records.count, POL(@"скопирован"), POL(@"скопировано"), POL(@"скопировано")),
+                                    POCount(result.records.count, POL(@"файл"), POL(@"файла"), POL(@"файлов"))];
+        if (result.alreadyCopied) {
+            [message appendFormat:POL(@", уже были скопированы: %@"), PONumber(result.alreadyCopied)];
+        }
+        [message appendString:result.records.count ? POL(@". Отменить — ⌘Z") : @"."];
+        _lastMessage = message;
+        // The originals did not move. Copies made inside the library are new files in it.
+        if (result.records.count && [self isInsideLibrary:result.records.firstObject.to]) [self startScan]; else [self updateUI];
+        [self showErrors:result.errors title:POL(@"Не все файлы удалось скопировать")];
+        return;
     }
     _lastMessage = [NSString stringWithFormat:POL(@"Готово: %@ %@. Отменить — ⌘Z"),
                     POPlural(result.records.count, POL(@"перемещён"), POL(@"перемещено"), POL(@"перемещено")),
@@ -1344,22 +1513,57 @@ static NSString *const POObjectFiltersKey = @"objectFilters";
     [self trashItems:_content.grid.selectedItems];
 }
 
+/// A few files go to the Trash at once; more (thousands of duplicates) in the background, with the library staying
+/// on screen and the progress in the status line.
 - (void)trashItems:(NSArray<POPhotoItem *> *)items {
     if (!items.count || !_plan || _scanner || _organizing) return;
-    NSFileManager *fm = NSFileManager.defaultManager;
     NSMutableArray<NSString *> *errors = [NSMutableArray array];
     NSMutableArray<POPhotoItem *> *trashedItems = [NSMutableArray array];
-    for (POPhotoItem *item in items) {
+    void (^trash)(POPhotoItem *) = ^(POPhotoItem *item) {
         NSError *error = nil;
-        if ([fm trashItemAtURL:item.url resultingItemURL:NULL error:&error]) {
+        if ([NSFileManager.defaultManager trashItemAtURL:item.url resultingItemURL:NULL error:&error]) {
             [trashedItems addObject:item];
         } else {
             [errors addObject:[NSString stringWithFormat:@"%@: %@", item.relativePath, error.localizedDescription]];
         }
+    };
+    void (^finish)(void) = ^{
+        self->_lastMessage = [NSString stringWithFormat:POL(@"В Корзине: %@. Вернуть можно из Корзины в Finder."),
+                              POCount(trashedItems.count, POL(@"файл"), POL(@"файла"), POL(@"файлов"))];
+        [self applyRemovedItems:trashedItems moves:@[]];
+        [self showErrors:errors title:POL(@"Не все файлы удалось переместить в Корзину")];
+    };
+    if (items.count <= 20) {
+        for (POPhotoItem *item in items) trash(item);
+        finish();
+        return;
     }
-    _lastMessage = [NSString stringWithFormat:POL(@"В Корзине: %@. Вернуть можно из Корзины в Finder."), POCount(trashedItems.count, POL(@"файл"), POL(@"файла"), POL(@"файлов"))];
-    [self applyRemovedItems:trashedItems moves:@[]];
-    [self showErrors:errors title:POL(@"Не все файлы удалось переместить в Корзину")];
+    _organizing = YES;
+    [self updateUI];
+    NSUInteger total = items.count;
+    [_content setStatusText:POL(@"Перемещение в Корзину…") canOrganize:NO];
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        [items enumerateObjectsUsingBlock:^(POPhotoItem *item, NSUInteger index, BOOL *stop) {
+            @autoreleasepool {
+                trash(item);
+            }
+            if ((index + 1) % 50 == 0 || index + 1 == total) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    typeof(self) me = weakSelf;
+                    if (!me) return;
+                    [me->_content setStatusText:[NSString stringWithFormat:POL(@"Перемещение в Корзину: %@ из %@"), PONumber(index + 1), PONumber(total)]
+                                    canOrganize:NO];
+                });
+            }
+        }];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) me = weakSelf;
+            if (!me) return;
+            me->_organizing = NO;
+            finish();
+        });
+    });
 }
 
 #pragma mark - Recognition
@@ -1464,10 +1668,20 @@ static NSString *const POObjectFiltersKey = @"objectFilters";
     if (_sidebarItem.collapsed == showsSidebar) _sidebarItem.collapsed = !showsSidebar;
 
     NSWindow *window = self.window;
-    window.title = _rootURL ? _rootURL.lastPathComponent : @"Photo Organizer";
-    window.representedURL = _rootURL;
-    // The counts live in the clickable filter strip; the subtitle just says where the folder is.
-    window.subtitle = _rootURL ? _rootURL.URLByDeletingLastPathComponent.path.stringByAbbreviatingWithTildeInPath : @"";
+    if (_rootURLs.count > 1) {
+        // Several folders: the first by name and how many more; the subtitle lists them.
+        window.title = [NSString stringWithFormat:POL(@"%@ и ещё %@"), _rootURL.lastPathComponent,
+                        POCount(_rootURLs.count - 1, POL(@"папка"), POL(@"папки"), POL(@"папок"))];
+        window.representedURL = nil;
+        NSMutableArray<NSString *> *paths = [NSMutableArray array];
+        for (NSURL *root in _rootURLs) [paths addObject:root.path.stringByAbbreviatingWithTildeInPath];
+        window.subtitle = [paths componentsJoinedByString:@"  ·  "];
+    } else {
+        window.title = _rootURL ? _rootURL.lastPathComponent : @"Photo Organizer";
+        window.representedURL = _rootURL;
+        // The counts live in the clickable filter strip; the subtitle just says where the folder is.
+        window.subtitle = _rootURL ? _rootURL.URLByDeletingLastPathComponent.path.stringByAbbreviatingWithTildeInPath : @"";
+    }
 
     NSString *status;
     NSUInteger pending = _plan.pendingItems.count;
@@ -1500,7 +1714,24 @@ static NSString *const POObjectFiltersKey = @"objectFilters";
 
 /// Shows the options and the resulting folder list; nothing moves until the sheet is confirmed.
 - (IBAction)organize:(id)sender {
-    if (![self canOrganize] || self.window.attachedSheet) return;
+    if (!_plan || _scanner || _organizing || self.window.attachedSheet) return;
+    // For organizing by person: files in which exactly one named person was recognised.
+    NSMapTable<POPhotoItem *, NSString *> *names = [NSMapTable strongToStrongObjectsMapTable];
+    NSHashTable<POPhotoItem *> *crowded = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+    for (POPerson *person in _people ?: @[]) {
+        if (!person.isNamed) continue;
+        for (POPhotoItem *item in person.items) {
+            if ([crowded containsObject:item]) continue;
+            if ([names objectForKey:item]) {
+                [names removeObjectForKey:item];
+                [crowded addObject:item];
+            } else {
+                [names setObject:person.displayName forKey:item];
+            }
+        }
+    }
+    _plan.personNames = names;
+    [_plan rebuild];
     POOrganizeSheetController *sheet = [[POOrganizeSheetController alloc] initWithPlan:_plan];
     __weak typeof(self) weakSelf = self;
     sheet.onChange = ^{
@@ -1512,7 +1743,11 @@ static NSString *const POObjectFiltersKey = @"objectFilters";
         [me updateUI];
     };
     sheet.completion = ^(BOOL confirmed) {
-        if (confirmed) [weakSelf applyPlan];
+        typeof(self) me = weakSelf;
+        if (!me) return;
+        // The destination chosen stays for this library (until another set of folders is opened).
+        me->_destinationURL = [me->_plan.rootURL.path isEqualToString:me->_rootURL.path] ? nil : me->_plan.rootURL;
+        if (confirmed) [me applyPlan];
     };
     [self.window.contentViewController presentViewControllerAsSheet:sheet];
 }
@@ -1520,19 +1755,22 @@ static NSString *const POObjectFiltersKey = @"objectFilters";
 - (void)applyPlan {
     if (![self canOrganize]) return;
     POPlan *plan = _plan;
+    BOOL copies = plan.copiesFiles;
     _organizing = YES;
-    [_content showProgressWithText:POL(@"Перемещение файлов…") fraction:0 cancellable:NO];
+    [_content showProgressWithText:copies ? POL(@"Копирование файлов…") : POL(@"Перемещение файлов…") fraction:0 cancellable:NO];
     [self updateUI];
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         POOrganizeResult *result = [POOrganizer applyPlan:plan progress:^(NSUInteger done, NSUInteger total) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                NSString *text = [NSString stringWithFormat:POL(@"Перемещение файлов: %@ из %@"), PONumber(done), PONumber(total)];
+                NSString *text = [NSString stringWithFormat:copies ? POL(@"Копирование файлов: %@ из %@") : POL(@"Перемещение файлов: %@ из %@"),
+                                  PONumber(done), PONumber(total)];
                 [self->_content showProgressWithText:text fraction:(double)done / total cancellable:NO];
             });
         }];
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self didFinishMoveWithResult:result rootURL:plan.rootURL actionName:POL(@"раскладку по папкам")];
+            [self didFinishMoveWithResult:result rootURL:plan.rootURL
+                               actionName:copies ? POL(@"копирование по папкам") : POL(@"раскладку по папкам")];
         });
     });
 }
@@ -1550,6 +1788,12 @@ static NSString *const POObjectFiltersKey = @"objectFilters";
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_organizing = NO;
             self->_lastMessage = nil;
+            if (result.copied) {
+                // Copies went to the Trash; the library only had them if they were made inside it.
+                if ([self isInsideLibrary:result.records.firstObject.to]) [self startScan]; else [self updateUI];
+                [self showErrors:errors title:POL(@"Не все копии удалось убрать")];
+                return;
+            }
             [self applyRemovedItems:@[] moves:moves ?: @[]];
             [self showErrors:errors title:POL(@"Не все файлы удалось вернуть")];
         });
@@ -1559,9 +1803,11 @@ static NSString *const POObjectFiltersKey = @"objectFilters";
 #pragma mark - Drag & drop
 
 - (NSURL *)droppedURL:(id<NSDraggingInfo>)sender {
-    NSArray<NSURL *> *urls = [sender.draggingPasteboard readObjectsForClasses:@[NSURL.class]
-                                                                       options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
-    return urls.firstObject;
+    return [self droppedURLs:sender].firstObject;
+}
+
+- (NSArray<NSURL *> *)droppedURLs:(id<NSDraggingInfo>)sender {
+    return [sender.draggingPasteboard readObjectsForClasses:@[NSURL.class] options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}] ?: @[];
 }
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
@@ -1580,11 +1826,13 @@ static NSString *const POObjectFiltersKey = @"objectFilters";
 }
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
-    NSURL *url = [self droppedURL:sender];
+    NSArray<NSURL *> *urls = [self droppedURLs:sender];
     [_content setDropHighlighted:NO];
-    if (!url || _organizing || sender.draggingSource) return NO;
+    if (!urls.count || _organizing || sender.draggingSource) return NO;
     [NSApp activateIgnoringOtherApps:YES];
-    [self loadFolder:url];
+    // Folders dropped on the window: opened together, or — onto an open library — added to it.
+    if (_plan && _rootURLs.count) [self loadFolders:[_rootURLs arrayByAddingObjectsFromArray:urls] keepDestination:YES];
+    else [self loadFolders:urls];
     return YES;
 }
 

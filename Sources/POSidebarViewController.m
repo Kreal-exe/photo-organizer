@@ -242,6 +242,15 @@ static NSString *const POSidebarScaleKey = @"sidebarScale";
                                         symbolName:@"map"
                                              count:self.locatedCount
                                             filter:[POFilter filterWithKind:POFilterKindMap folder:nil]]];
+        [rows addObject:[POSidebarRow headerWithTitle:POL(@"Типы") key:@"types"]];
+        [rows addObject:[POSidebarRow rowWithTitle:POL(@"Скриншоты")
+                                        symbolName:@"camera.viewfinder"
+                                             count:self.screenshotCount
+                                            filter:[POFilter filterWithKind:POFilterKindScreenshots folder:nil]]];
+        [rows addObject:[POSidebarRow rowWithTitle:POL(@"Видео")
+                                        symbolName:@"video"
+                                             count:self.videoCount
+                                            filter:[POFilter filterWithKind:POFilterKindVideos folder:nil]]];
         if (self.people.count) {
             [rows addObject:[POSidebarRow headerWithTitle:POL(@"Люди") key:@"people"]];
             // The long tail of people seen in a handful of photos would bury everything below.

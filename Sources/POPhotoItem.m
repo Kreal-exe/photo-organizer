@@ -49,14 +49,24 @@ NSString *POItemDateText(POPhotoItem *item, BOOL withTime) {
 @implementation POPhotoItem
 
 - (instancetype)initWithURL:(NSURL *)url relativePath:(NSString *)relativePath {
+    return [self initWithURL:url relativePath:relativePath rootURL:nil];
+}
+
+- (instancetype)initWithURL:(NSURL *)url relativePath:(NSString *)relativePath rootURL:(NSURL *)rootURL {
     if ((self = [super init])) {
         _url = url;
+        _rootURL = rootURL;
         _relativePath = [relativePath copy];
         _currentFolder = [relativePath.stringByDeletingLastPathComponent copy];
         _date = NSDate.distantPast;
         _dateSource = PODateSourceFile;
     }
     return self;
+}
+
+- (void)movedToURL:(NSURL *)url rootURL:(NSURL *)rootURL relativePath:(NSString *)relativePath {
+    _rootURL = rootURL;
+    [self movedToURL:url relativePath:relativePath];
 }
 
 - (void)movedToURL:(NSURL *)url relativePath:(NSString *)relativePath {
@@ -76,8 +86,11 @@ NSString *POItemDateText(POPhotoItem *item, BOOL withTime) {
 - (BOOL)needsMove {
     // Not a literal comparison: the file system may hand names back in another Unicode normalization form
     // (HFS+) or letter case than the one the folder was created with.
-    return self.destinationFolder != nil &&
-        [self.destinationFolder compare:self.currentFolder options:NSCaseInsensitiveSearch] != NSOrderedSame;
+    if (!self.destinationFolder) return NO;
+    // In its place only in the right folder of the destination, which may be another folder than the file's own.
+    if (self.destinationRootURL && self.rootURL
+        && [self.destinationRootURL.path compare:self.rootURL.path options:NSCaseInsensitiveSearch] != NSOrderedSame) return YES;
+    return [self.destinationFolder compare:self.currentFolder options:NSCaseInsensitiveSearch] != NSOrderedSame;
 }
 
 @end

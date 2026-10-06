@@ -17,6 +17,8 @@ typedef NS_ENUM(NSInteger, POFilterKind) {
     POFilterKindObject,       // a saved object filter; `folder` holds its search words
     POFilterKindObjectSearch, // what the search field finds, on its own page
     POFilterKindMap,          // the files that know where they were taken, on a map
+    POFilterKindScreenshots,  // screenshots, told by name, folder and screen size (see POScreenshots)
+    POFilterKindVideos,
 };
 
 /// What the grid should show; identifies a sidebar row across plan rebuilds.
@@ -55,6 +57,9 @@ typedef NS_ENUM(NSInteger, POFilterKind) {
 @property (nonatomic) NSInteger suggestedCount;
 /// Number of files that know where they were taken.
 @property (nonatomic) NSInteger locatedCount;
+/// Numbers of screenshots and of videos, for the Types section.
+@property (nonatomic) NSInteger screenshotCount;
+@property (nonatomic) NSInteger videoCount;
 
 /// Number of files flagged by the nudity model; a negative value hides the row (the feature is off).
 /// Takes effect with the next -setPlan:selecting:.

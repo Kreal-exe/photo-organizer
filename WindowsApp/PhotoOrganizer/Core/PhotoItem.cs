@@ -21,12 +21,16 @@ public enum Precision { Day = 0, Month = 1, Year = 2 }
 /// <summary>One image or video file found by the scanner.</summary>
 public sealed class PhotoItem
 {
-    public PhotoItem(string path, string relativePath)
+    public PhotoItem(string path, string relativePath, string root = "")
     {
         Path = path;
         RelativePath = relativePath;
         CurrentFolder = FolderOf(relativePath);
+        Root = root;
     }
+
+    /// <summary>The library folder the file is in (a library can be made of several); RelativePath is relative to it.</summary>
+    public string Root { get; private set; }
 
     /// <summary>Absolute, with the system's separators.</summary>
     public string Path { get; private set; }
@@ -49,6 +53,8 @@ public sealed class PhotoItem
     /// <summary>A small copy of another, larger photo of the folder (see SimilarCopies).</summary>
     public bool Tiny;
     public bool Video;
+    /// <summary>Not a photograph: a postcard, a meme, a drawing, a picture saved from a messenger or the web (see Pictures).</summary>
+    public bool IsPicture;
     public double Duration;
     /// <summary>A OneDrive / iCloud placeholder whose contents are not on this PC: never read, never hashed.</summary>
     public bool CloudOnly;
@@ -61,6 +67,8 @@ public sealed class PhotoItem
     public Dictionary<string, float>? Labels;
     /// <summary>0…1 from the optional nudity model; null when not analysed.</summary>
     public float? NudityScore;
+    /// <summary>The text written in the picture, lower-cased for the search (see PictureText); null when not read.</summary>
+    public string? Text;
     public ulong? VisualHash;
     /// <summary>The key the file's recognition results are stored under (see RecognitionStore); null until analysed.</summary>
     public string? RecognitionKey;
@@ -72,8 +80,10 @@ public sealed class PhotoItem
     public PhotoItem? DuplicateOf;
     /// <summary>On the original: its exact copies.</summary>
     public List<PhotoItem>? Duplicates;
-    /// <summary>Assigned by the plan, relative to the root, with "/".</summary>
+    /// <summary>Assigned by the plan, relative to DestinationRoot, with "/".</summary>
     public string? DestinationFolder;
+    /// <summary>The folder everything is organized into (the plan's), which may be another one than the file's own.</summary>
+    public string? DestinationRoot;
 
     public string Name => RelativePath[(RelativePath.LastIndexOf('/') + 1)..];
 
@@ -85,9 +95,10 @@ public sealed class PhotoItem
         return slash < 0 ? "" : relativePath[..slash];
     }
 
-    public void MovedTo(string path, string relativePath)
+    public void MovedTo(string path, string root, string relativePath)
     {
         Path = path;
+        Root = root;
         RelativePath = relativePath;
         CurrentFolder = FolderOf(relativePath);
     }
@@ -95,8 +106,10 @@ public sealed class PhotoItem
     public bool Undated => DateSource == DateSource.File;
     public bool IsDuplicate => DuplicateOf != null;
 
-    /// <summary>Windows folder names ignore letter case.</summary>
-    public bool NeedsMove => DestinationFolder != null && !string.Equals(DestinationFolder, CurrentFolder, StringComparison.OrdinalIgnoreCase);
+    /// <summary>In its place only in the right folder of the destination. Windows folder names ignore letter case.</summary>
+    public bool NeedsMove => DestinationFolder != null
+        && (!string.Equals(DestinationRoot ?? Root, Root, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(DestinationFolder, CurrentFolder, StringComparison.OrdinalIgnoreCase));
 
     public Precision Precision => DateSource switch
     {

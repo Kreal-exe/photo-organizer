@@ -21,13 +21,36 @@ public sealed partial class Scanner
     readonly CancellationTokenSource _cancel = new();
     List<string> _sidecars = [];
 
-    public Scanner(string root)
+    public Scanner(string root) : this([root])
     {
-        Root = System.IO.Path.GetFullPath(root).TrimEnd('\\', '/');
-        if (Root.EndsWith(':')) Root += "\\";
     }
 
+    /// <summary>
+    /// A library of several folders, scanned together (copies are found across them). A folder inside another one is
+    /// left out: the outer one covers it.
+    /// </summary>
+    public Scanner(IEnumerable<string> roots)
+    {
+        Roots = Normalized(roots);
+        Root = Roots.Count > 0 ? Roots[0] : "";
+    }
+
+    public static string NormalizedRoot(string root)
+    {
+        string full = System.IO.Path.GetFullPath(root).TrimEnd('\\', '/');
+        return full.EndsWith(':') ? full + "\\" : full;
+    }
+
+    public static List<string> Normalized(IEnumerable<string> roots)
+    {
+        var all = roots.Select(NormalizedRoot).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        bool Inside(string a, string b) => a.StartsWith(b.TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase);
+        return all.Where(r => !all.Any(other => other != r && Inside(r, other))).ToList();
+    }
+
+    /// <summary>The first folder of the library.</summary>
     public string Root { get; }
+    public List<string> Roots { get; }
     /// <summary>Top-level folders whose files are never picked as the original of a duplicate set.</summary>
     public List<string> DeprioritizedFolders { get; set; } = [];
 
@@ -39,17 +62,26 @@ public sealed partial class Scanner
         var token = _cancel.Token;
         var items = Enumerate(progress, token);
         if (token.IsCancellationRequested) return null;
-        // What earlier scans of this folder read is reused: only new and changed files are read again.
-        using var cache = new ScanCache(Root);
-        ForEach(items, ScanPhase.Metadata, progress, item => ReadMetadata(item, cache), token);
+        // What earlier scans of these folders read is reused: only new and changed files are read again.
+        var caches = Roots.ToDictionary(r => r, r => new ScanCache(r), StringComparer.OrdinalIgnoreCase);
+        using var disposer = new Disposer(caches.Values);
+        ForEach(items, ScanPhase.Metadata, progress, item => ReadMetadata(item, caches[item.Root]), token);
         if (token.IsCancellationRequested) return null;
         DateFromTakeoutSidecars(items, _sidecars);
         DateFromNeighbors(items);
         ManualDates.ApplyTo(items);
-        FindDuplicates(items, cache, progress, token);
+        FindDuplicates(items, caches, progress, token);
         if (token.IsCancellationRequested) return null;
         items.Sort(PhotoItem.ByDate);
         return items;
+    }
+
+    sealed class Disposer(IEnumerable<IDisposable> items) : IDisposable
+    {
+        public void Dispose()
+        {
+            foreach (var item in items) item.Dispose();
+        }
     }
 
     // --- Dates in file names ----------------------------------------------------------------------------------------
@@ -283,12 +315,12 @@ public sealed partial class Scanner
     {
         var items = new List<PhotoItem>();
         _sidecars = [];
-        var stack = new Stack<string>();
-        stack.Push(Root);
+        var stack = new Stack<(string Directory, string Root)>();
+        foreach (string root in Roots) stack.Push((root, root));
         var options = new EnumerationOptions { IgnoreInaccessible = true, AttributesToSkip = 0, RecurseSubdirectories = false };
         while (stack.Count > 0 && !token.IsCancellationRequested)
         {
-            string directory = stack.Pop();
+            var (directory, root) = stack.Pop();
             IEnumerable<FileSystemInfo> entries;
             try
             {
@@ -306,7 +338,7 @@ public sealed partial class Scanner
                 if ((attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0) continue;
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
-                    if ((attributes & FileAttributes.ReparsePoint) == 0 && !SkippedFolders.Contains(name)) stack.Push(entry.FullName);
+                    if ((attributes & FileAttributes.ReparsePoint) == 0 && !SkippedFolders.Contains(name)) stack.Push((entry.FullName, root));
                     continue;
                 }
                 if (name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
@@ -317,8 +349,8 @@ public sealed partial class Scanner
                 string? kind = MediaKind(name);
                 if (kind == null) continue;
                 var file = (FileInfo)entry;
-                string relative = System.IO.Path.GetRelativePath(Root, entry.FullName).Replace('\\', '/');
-                var item = new PhotoItem(entry.FullName, relative)
+                string relative = System.IO.Path.GetRelativePath(root, entry.FullName).Replace('\\', '/');
+                var item = new PhotoItem(entry.FullName, relative, root)
                 {
                     Video = kind == "video",
                     CloudOnly = (attributes & CloudOnlyAttributes) != 0,
@@ -378,13 +410,14 @@ public sealed partial class Scanner
         }
     }
 
-    void FindDuplicates(List<PhotoItem> items, ScanCache cache, Action<ScanPhase, int, int>? progress, CancellationToken token)
+    void FindDuplicates(List<PhotoItem> items, Dictionary<string, ScanCache> caches, Action<ScanPhase, int, int>? progress, CancellationToken token)
     {
         // Only files that share their size with another file can be identical, so only those get hashed.
         var candidates = items.Where(i => i.FileSize > 0 && !i.CloudOnly).GroupBy(i => i.FileSize)
                               .Where(g => g.Count() > 1).SelectMany(g => g).ToList();
         ForEach(candidates, ScanPhase.Duplicates, progress, item =>
         {
+            var cache = caches[item.Root];
             item.ContentHash = cache.HashFor(item);
             if (item.ContentHash != null) return;
             item.ContentHash = HashFile(item.Path, token);

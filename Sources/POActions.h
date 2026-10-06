@@ -6,6 +6,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// MainWindowController implements all of them.
 @protocol POActions <NSObject>
 - (IBAction)openDocument:(nullable id)sender;
+- (IBAction)addFolder:(nullable id)sender;
+- (IBAction)removeFolder:(nullable id)sender;
 - (IBAction)rescan:(nullable id)sender;
 - (IBAction)organize:(nullable id)sender;
 - (IBAction)cancelScan:(nullable id)sender;

@@ -31,7 +31,8 @@ FOUNDATION_EXPORT NSString *POItemDateText(POPhotoItem *item, BOOL withTime);
 /// One image or video file found by the scanner.
 @interface POPhotoItem : NSObject
 
-- (instancetype)initWithURL:(NSURL *)url relativePath:(NSString *)relativePath NS_DESIGNATED_INITIALIZER;
+- (instancetype)initWithURL:(NSURL *)url relativePath:(NSString *)relativePath rootURL:(nullable NSURL *)rootURL NS_DESIGNATED_INITIALIZER;
+- (instancetype)initWithURL:(NSURL *)url relativePath:(NSString *)relativePath;
 - (instancetype)init NS_UNAVAILABLE;
 
 @property (nonatomic, readonly) NSURL *url;
@@ -40,8 +41,12 @@ FOUNDATION_EXPORT NSString *POItemDateText(POPhotoItem *item, BOOL withTime);
 /// Folder the file currently lives in, relative to the root ("" for the root itself).
 @property (nonatomic, readonly, copy) NSString *currentFolder;
 
+/// The library folder the file is in (a library can be made of several); relativePath is relative to it.
+@property (nonatomic, readonly, nullable) NSURL *rootURL;
+
 /// The file was moved (by the app): follow it, keeping everything known about it.
 - (void)movedToURL:(NSURL *)url relativePath:(NSString *)relativePath;
+- (void)movedToURL:(NSURL *)url rootURL:(NSURL *)rootURL relativePath:(NSString *)relativePath;
 
 @property (nonatomic) unsigned long long fileSize;
 @property (nonatomic, strong) NSDate *date;
@@ -84,6 +89,8 @@ FOUNDATION_EXPORT NSString *POItemDateText(POPhotoItem *item, BOOL withTime);
 @property (atomic) BOOL bestOfCopies;
 /// 0…1 from the optional nudity model; nil when not analysed.
 @property (atomic, strong, nullable) NSNumber *nudityScore;
+/// The text written in the picture (a screenshot, a document, a sign), lower-cased for the search; nil when not read.
+@property (atomic, copy, nullable) NSString *text;
 
 @property (nonatomic, copy, nullable) NSString *contentHash;
 /// Set on every copy; points to the file that is kept as the original.
@@ -94,6 +101,8 @@ FOUNDATION_EXPORT NSString *POItemDateText(POPhotoItem *item, BOOL withTime);
 
 /// Folder assigned by the plan, relative to the root.
 @property (nonatomic, copy, nullable) NSString *destinationFolder;
+/// The folder everything is organized into (the plan's), which may be another one than the file's own.
+@property (nonatomic, strong, nullable) NSURL *destinationRootURL;
 @property (nonatomic, readonly) BOOL needsMove;
 
 @end
